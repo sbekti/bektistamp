@@ -2,6 +2,7 @@
 #include <BleKeyboard.h>
 #include <esp_task_wdt.h>
 #include <esp_bt.h>
+#include "InterpolationLib.h"
 
 // While we wait for Feather ESP32 V2 to get added to the Espressif BSP,
 // we have to select PICO D4 and UNCOMMENT this line!
@@ -20,6 +21,7 @@
 #define WDT_TIMEOUT_SECS 3
 // #define PRINT_DEBUG_LOGS 1
 
+#define COLOR_RED 0xFF0000
 #define COLOR_BLUE 0x0000FF
 #define COLOR_GREEN 0x00FF00
 #define COLOR_WHITE 0xFFFFFF
@@ -28,7 +30,11 @@ std::string DEVICE_NAME = "Bektistamp 3000";
 std::string MFG_NAME = "Samudra Bekti";
 
 const char* MACROS[] = { "fastamp", "goodenough" };
-#define MACRO_COUNT (sizeof(MACROS)/sizeof(char*))
+#define MACRO_COUNT (sizeof(MACROS) / sizeof(char*))
+
+#define BAT_LUT_SIZE 21
+double BAT_PCT_VALUES[BAT_LUT_SIZE] = { 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100 };
+double BAT_VOLTAGE_VALUES[BAT_LUT_SIZE] = { 3270, 3610, 3690, 3710, 3730, 3750, 3770, 3790, 3800, 3820, 3840, 3850, 3870, 3910, 3950, 3980, 4020, 4080, 4110, 4150, 4200 };
 
 #if defined(PIN_NEOPIXEL)
 Adafruit_NeoPixel pixel(1, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
@@ -53,13 +59,21 @@ void setup() {
   bleKeyboard.begin();
   enableInternalPower();
 
-  blinkLED(4, COLOR_BLUE);
-
   esp_task_wdt_init(WDT_TIMEOUT_SECS, true);  // enable panic so ESP32 restarts
-  esp_task_wdt_add(NULL);                // add current thread to WDT watch
+  esp_task_wdt_add(NULL);                     // add current thread to WDT watch
 
   int batteryLevel = getBatteryLevel();
+#if defined(PRINT_DEBUG_LOGS)
+  Serial.print("Battery pct: ");
+  Serial.println(batteryLevel);
+#endif
   bleKeyboard.setBatteryLevel(batteryLevel);
+
+  if (batteryLevel <= 20) {
+    blinkLED(4, COLOR_RED);
+  } else {
+    blinkLED(4, COLOR_BLUE);
+  }
 }
 
 void loop() {
@@ -94,9 +108,6 @@ void loop() {
 #endif
     start_deep_sleep();
   } else {
-#if defined(PRINT_DEBUG_LOGS)
-    Serial.println(millis() - timer);
-#endif
     delay(100);
     esp_task_wdt_reset();
   }
@@ -122,11 +133,22 @@ void print_wakeup_reason() {
 }
 
 int getBatteryLevel() {
-  float batteryVoltage = analogReadMilliVolts(VBATPIN);
-  batteryVoltage *= 2;  // we divided by 2, so multiply back
+  float voltage = analogReadMilliVolts(VBATPIN);
+  voltage *= 2;  // we divided by 2, so multiply back
 
-  int batteryLevel = map(batteryVoltage, 3412, 4192, 0, 100);
-  return constrain(batteryLevel, 0, 100);
+#if defined(PRINT_DEBUG_LOGS)
+  Serial.print("VBat: ");
+  Serial.println(voltage);
+#endif
+
+  if (voltage <= BAT_VOLTAGE_VALUES[0]) {
+    return 0;
+  } else if (voltage >= BAT_VOLTAGE_VALUES[BAT_LUT_SIZE - 1]) {
+    return 100;
+  }
+
+  double batteryPct = Interpolation::ConstrainedSpline(BAT_VOLTAGE_VALUES, BAT_PCT_VALUES, BAT_LUT_SIZE, voltage);
+  return round(batteryPct);
 }
 
 void blinkLED(int times, uint32_t color) {
