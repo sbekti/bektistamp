@@ -1,6 +1,7 @@
 #include <Adafruit_NeoPixel.h>
 #include <BleKeyboard.h>
 #include <esp_task_wdt.h>
+#include <esp_bt.h>
 
 // While we wait for Feather ESP32 V2 to get added to the Espressif BSP,
 // we have to select PICO D4 and UNCOMMENT this line!
@@ -12,14 +13,22 @@
 #define NEOPIXEL_I2C_POWER 2
 #endif
 
+#define CPU_FREQ_MHZ 80
 #define WAKEUP_PIN GPIO_NUM_26
-#define SLEEP_TIMEOUT 2 * 60 * 1000
-#define WDT_TIMEOUT 3
+#define VBATPIN A13
+#define SLEEP_TIMEOUT_MSECS 2 * 60 * 1000
+#define WDT_TIMEOUT_SECS 3
 // #define PRINT_DEBUG_LOGS 1
+
+#define COLOR_BLUE 0x0000FF
+#define COLOR_GREEN 0x00FF00
+#define COLOR_WHITE 0xFFFFFF
 
 std::string DEVICE_NAME = "Bektistamp 3000";
 std::string MFG_NAME = "Samudra Bekti";
-String MACRO = "fastamp";
+
+const char* MACROS[] = { "fastamp", "goodenough" };
+#define MACRO_COUNT (sizeof(MACROS)/sizeof(char*))
 
 #if defined(PIN_NEOPIXEL)
 Adafruit_NeoPixel pixel(1, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
@@ -30,6 +39,8 @@ BleKeyboard bleKeyboard(DEVICE_NAME, MFG_NAME);
 unsigned long timer = 0;
 
 void setup() {
+  setCpuFrequencyMhz(CPU_FREQ_MHZ);
+
 #if defined(PRINT_DEBUG_LOGS)
   Serial.begin(115200);
   print_wakeup_reason();
@@ -42,10 +53,13 @@ void setup() {
   bleKeyboard.begin();
   enableInternalPower();
 
-  blinkLED(4, 0x00FFFF);
+  blinkLED(4, COLOR_BLUE);
 
-  esp_task_wdt_init(WDT_TIMEOUT, true); //enable panic so ESP32 restarts
-  esp_task_wdt_add(NULL); //add current thread to WDT watch
+  esp_task_wdt_init(WDT_TIMEOUT_SECS, true);  // enable panic so ESP32 restarts
+  esp_task_wdt_add(NULL);                // add current thread to WDT watch
+
+  int batteryLevel = getBatteryLevel();
+  bleKeyboard.setBatteryLevel(batteryLevel);
 }
 
 void loop() {
@@ -62,7 +76,7 @@ void loop() {
       delay(50);
       bleKeyboard.releaseAll();
 
-      bleKeyboard.print(MACRO);
+      bleKeyboard.print(MACROS[random(MACRO_COUNT)]);
       delay(500);
 
       bleKeyboard.press(KEY_LEFT_GUI);
@@ -70,16 +84,15 @@ void loop() {
       delay(50);
       bleKeyboard.releaseAll();
 
-      blinkLED(4, 0x00FF00);
+      blinkLED(4, COLOR_GREEN);
     }
-  } else if (millis() - timer >= SLEEP_TIMEOUT) {
-    blinkLED(4, 0xFFFF00);
+  } else if (millis() - timer >= SLEEP_TIMEOUT_MSECS) {
+    blinkLED(4, COLOR_WHITE);
 #if defined(PRINT_DEBUG_LOGS)
     Serial.println("Going into deep sleep mode, bye!");
     Serial.println("--------------------------------");
 #endif
-    disableInternalPower();
-    esp_deep_sleep_start();
+    start_deep_sleep();
   } else {
 #if defined(PRINT_DEBUG_LOGS)
     Serial.println(millis() - timer);
@@ -87,6 +100,12 @@ void loop() {
     delay(100);
     esp_task_wdt_reset();
   }
+}
+
+void start_deep_sleep() {
+  disableInternalPower();
+  btStop();
+  esp_deep_sleep_start();
 }
 
 void print_wakeup_reason() {
@@ -100,6 +119,14 @@ void print_wakeup_reason() {
     case ESP_SLEEP_WAKEUP_TOUCHPAD: Serial.println("Wake up caused by a touchpad"); break;
     default: Serial.printf("Wake up not caused by Deep Sleep: %d\n", wake_up_source); break;
   }
+}
+
+int getBatteryLevel() {
+  float batteryVoltage = analogReadMilliVolts(VBATPIN);
+  batteryVoltage *= 2;  // we divided by 2, so multiply back
+
+  int batteryLevel = map(batteryVoltage, 3412, 4192, 0, 100);
+  return constrain(batteryLevel, 0, 100);
 }
 
 void blinkLED(int times, uint32_t color) {
